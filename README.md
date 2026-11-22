@@ -15,4 +15,5 @@ Admin tips
 - Import tab: drop a ZIP or images. Names are read by OCR; fix and confirm, then approve.
 - Template tab: open any saved recruit, move the portrait and name boxes, then "re-crop ALL recruits" (originals untouched).
 - Data & setup > Danger zone: delete all recruits and posters, clear the review queue, reset the leaderboard. After deleting, the same posters can be imported again.
-- Data is stored per browser (IndexedDB). Export a backup regularly.
+- Recruits and scores are saved in the Cloudflare Worker `bupaf-api` (D1 database `bupaf-db`). Portraits and original posters are stored in ImageKit via the Worker. Admin sign-in uses the Worker's BUPAF_ADMIN_TOKEN. Only the import review queue and template settings stay in the browser.
+- Open the site from https://fahimzim12-png.github.io (the Worker's CORS allows only that origin).

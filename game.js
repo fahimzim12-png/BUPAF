@@ -36,15 +36,16 @@ $('#m').innerHTML=`${spr('trophy','tro')}<p class=mu>Round complete</p><div clas
 tune([523,659,784,1047,784,1047],110);let t0=performance.now();(function f(t){const k=clamp((t-t0)/1200,0,1);$('#big').textContent=Math.round(c.total*(1-Math.pow(1-k,3)));if(k<1)requestAnimationFrame(f)})(t0);
 if(c.total>=800||c.perfect)for(let i=0;i<50;i++){const e=document.createElement('i');e.className='cf';e.style.cssText=`left:${Math.random()*100}%;background:${['#F07B64','#D5EF77','#253B80'][i%3]};animation-delay:${Math.random()*.6}s`;document.body.append(e);setTimeout(()=>e.remove(),3400)}}
 async function submit(){const name=$('#pn').value.trim().slice(0,24);if(!name)return toast('Enter a display name');
-const c=calc(G.log,G.secs,G.timer);if(!c.done||c.total!=G.c.total)return toast('Score failed validation');if(await DB.get('results',G.id))return toast('This round was already submitted');
-S.name=name;S.pid=S.pid||uid();await DB.put('meta',{id:'player',pid:S.pid,name});
-await DB.put('results',{id:G.id,pid:S.pid,name,score:c.total,first:c.first,wrong:c.wrong,secs:G.secs,streak:c.mx,bonus:{combo:c.combo,perfect:c.perfect,speed:c.speed},date:Date.now(),log:G.log});$('#sb').disabled=true;toast('Score submitted');location.hash='#/board'}
+const c=calc(G.log,G.secs,G.timer);if(!c.done||c.total!=G.c.total)return toast('Score failed validation');if(G.sub)return toast('This round was already submitted');
+const b=$('#sb');b.disabled=true;S.name=name;S.pid=S.pid||uid();await DB.put('meta',{id:'player',pid:S.pid,name});
+try{await DB.put('results',{id:G.id,pid:S.pid,name,score:c.total,first:c.first,wrong:c.wrong,secs:G.secs,streak:c.mx,bonus:{combo:c.combo,perfect:c.perfect,speed:c.speed},date:Date.now(),log:G.log});G.sub=1;toast('Score submitted');location.hash='#/board'}
+catch(e){b.disabled=false;toast('Score not saved: '+e.message+'. Tap Submit to retry.')}}
 // ===== LEADERBOARD =====
 let bq='';async function board(){const rs=await DB.all('results'),P={};
 for(const r of rs){const p=P[r.pid]||(P[r.pid]={pid:r.pid,name:r.name,best:0,games:0,secs:1e9,streak:0});p.games++;p.name=r.name;p.best=Math.max(p.best,r.score);p.secs=Math.min(p.secs,r.secs);p.streak=Math.max(p.streak,r.streak)}
 const L=Object.values(P).sort((a,b)=>b.best-a.best||a.secs-b.secs),top=L.slice(0,3),q=bq.toLowerCase(),rest=L.slice(3).filter(p=>p.name.toLowerCase().includes(q));
 const pd=(p,i)=>p?`<div class="p${i+1}">${spr(i?'coin':'trophy','mini')}<span class=mu>#${i+1}</span><b>${p.best}</b>${esc(p.name)}<br><small class=mu>${fmt(p.secs)}</small></div>`:'<div></div>';
-$('#m').innerHTML=`<h2>Leaderboard</h2><p class=mu>Ranked by highest single-round score. Stored in this browser only; connect a cloud backend to share it across players.</p>
+$('#m').innerHTML=`<h2>Leaderboard</h2><p class=mu>Ranked by highest single-round score. Shared across all players.</p>
 ${L.length?`<div class=pod>${pd(top[1],1)}${pd(top[0],0)}${pd(top[2],2)}</div><input type=search id=bs placeholder="Search player" value="${esc(bq)}" aria-label="Search player">
 <table><tr><th>#</th><th>Player</th><th class=n>Best</th><th class=n>Games</th><th class=n>Best time</th><th class=n>Streak</th></tr>${rest.map(p=>`<tr class="${p.pid==S.pid?'me':''}"><td>${L.indexOf(p)+1}</td><td>${esc(p.name)}</td><td class=n>${p.best}</td><td class=n>${p.games}</td><td class=n>${fmt(p.secs)}</td><td class=n>${p.streak}</td></tr>`).join('')}</table>`:'<p><b>No scores yet.</b> <a href="#/">Play a round</a> and submit yours.</p>'}`;
 $('#bs')?.addEventListener('input',e=>{bq=e.target.value;board().then(()=>{const i=$('#bs');i.focus();i.setSelectionRange(99,99)})})}

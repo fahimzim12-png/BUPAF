@@ -1,6 +1,6 @@
 // ===== ADMIN =====
 const hashPw=async(pw,salt)=>sha(new TextEncoder().encode(salt+pw));
-async function admin(){const m=await DB.get('meta','admin');if(!A.auth){$('#m').innerHTML=`<h2>${m?'Admin sign in':'Create admin passcode'}</h2><p class=mu>${m?'':'First visit: choose a passcode (6+ characters). '}Local prototype: this gate runs in your browser and is not server-enforced security. See the Data tab for the Supabase setup that is.</p><div class=row><input type=password id=pw placeholder="Passcode" autocomplete=off><button class=btn data-a=${m?'login':'setpw'}>${m?'Sign in':'Create passcode'}</button></div>`;return}
+async function admin(){if(!A.auth&&tok())A.auth=true;if(!A.auth){$('#m').innerHTML=`<h2>Admin sign in</h2><p class=mu>Enter the admin token (the BUPAF_ADMIN_TOKEN secret of your Worker). Players can play and submit scores without it.</p><div class=row><input type=password id=pw placeholder="Admin token" autocomplete=off><button class=btn data-a=login>Sign in</button></div>`;return}
 A.staged=await DB.all('staged');const rs=await DB.all('recruits');A.rn=new Set(rs.map(r=>(r.name||'').trim().toLowerCase()));
 const T=[['rec','Recruits'],['imp','Import posters'],['tpl','Template'],['dat','Data & setup']];
 $('#m').innerHTML=`<div class=row style="justify-content:space-between"><h2 style="margin:0">Admin</h2><button class="btn s" data-a=logout>Sign out</button></div><div class=tab>${T.map(t=>`<button data-a=tab data-id=${t[0]} class="${A.tab==t[0]?'on':''}">${t[1]}${t[0]=='imp'&&A.staged.length?' ('+A.staged.length+')':''}</button>`).join('')}</div><div id=tabc></div>`;
@@ -31,7 +31,7 @@ const nst=s=>s.ok?'<span class=tg>Confirmed by you</span>':!s.ocr?'<span class="
 async function repair(ids){if(!A.tpl.cal)return toast('Calibrate the name region first (Import tab, Calibrate template)');
 try{await ocrEngine()}catch(e){return toast('OCR unavailable: '+e.message+'. No names were changed.')}
 const rs=(await DB.all('recruits')).filter(r=>!r.sample&&!r.verified&&r.posterId&&(ids?ids.includes(r.id):cand(r)));let n=0,f=0;
-for(const r of rs){const el=$('#rp');if(el)el.textContent='Reading names '+(n+f+1)+'/'+rs.length+'…';const p=await DB.get('posters',r.posterId);if(!p){f++;continue}
+for(const r of rs){const el=$('#rp');if(el)el.textContent='Reading names '+(n+f+1)+'/'+rs.length+'…';const p=await getPoster(r);if(!p){f++;continue}
 let o;try{o=await ocrBlob(p.blob,r.nreg||A.tpl.n)}catch(e){toast('OCR stopped: '+e.message+'. Names read so far were saved.');break}
 r.ocrName=o.text;r.nameConf=o.conf;r.ocrDone=true;
 if(o.text&&o.conf>=CFG.OCR_MIN){if(r.name!==o.text)r.prevName=r.name;r.name=o.text;r.nameSrc='ocr';r.needsReview=false}else{r.nameSrc=r.nameSrc||'legacy';r.needsReview=true}
@@ -42,7 +42,7 @@ async function ingest(files){if(!A.run){A.Q=[];A.seen=new Set()}for(const f of f
 else if(/^image\//.test(f.type))A.Q.push({name:f.name,size:f.size,get:async()=>f,st:'pending'});else A.Q.push({name:f.name,st:'fail',err:'Not an image or ZIP'})}
 runQ()}
 async function proc(it){try{const b=await it.get();if(b.size>CFG.MAXFILE)throw Error('Over '+CFG.MAXFILE/1e6+' MB');const h=await sha(await b.arrayBuffer());
-if(A.seen.has(h)||await DB.get('posters',h)||await DB.get('staged',h)){it.st='skip';return}A.seen.add(h);
+if(A.seen.has(h)||hasPoster(h)||await DB.get('staged',h)){it.st='skip';return}A.seen.add(h);
 const s={id:h,file:it.name,blob:b,name:'',crop:null};await mk(s);await ocrItem(s);await DB.put('staged',s);it.st='done'}catch(e){it.st='fail';it.err=e.message||'Could not read image'}}
 async function runQ(){if(A.run)return;A.run=true;let p;while((p=A.Q.filter(x=>x.st=='pending').slice(0,CFG.BATCH)).length){p.forEach(x=>x.st='run');await Promise.all(p.map(proc));paintImp()}A.run=false;if(A.tab=='imp')admin()}
 const cnt=s=>A.Q.filter(x=>x.st==s).length;
@@ -59,31 +59,26 @@ function edDraw(){const E=A.E,b=E.b,c=$('#ec');c.width=560;c.height=Math.round(5
 const p=pr(b,E.t.p),n=E.t.n;x.lineWidth=4;x.strokeStyle='#D5EF77';x.strokeRect(p.x*560,p.y*c.height,p.w*560,p.h*c.height);x.strokeStyle='#F07B64';x.strokeRect(n.x*560,n.y*c.height,n.w*560,n.h*c.height);
 $('#ep').getContext('2d').drawImage(cv(b,p,320,400),0,0,120,150)}
 async function openEd(id){const s=A.staged.find(x=>x.id==id);if(!s)return;A.E={id,t:structuredClone(s.crop||A.tpl),b:await createImageBitmap(s.blob)};edPaint();$('#edh').scrollIntoView({behavior:'smooth'})}
-async function approve(ids){let n=0,sk=0;for(const s of A.staged.filter(x=>ids.includes(x.id))){const nm=s.name.trim();if(!nm||!(s.ok||(s.ocr&&s.ocr.conf>=CFG.OCR_MIN))){sk++;continue}
-await DB.put('posters',{id:s.id,blob:s.blob,file:s.file});
-await DB.put('recruits',{id:uid(),name:nm,portrait:s.portrait,posterId:s.id,active:true,created:Date.now(),nameSrc:s.ok?'manual':'ocr',nameConf:s.ocr?s.ocr.conf:null,ocrName:s.ocr?s.ocr.text:'',verified:!!s.ok,needsReview:false,ocrDone:true,nreg:s.crop?s.crop.n:null});await DB.del('staged',s.id);A.sel.delete(s.id);n++}
-toast(n+' recruits added'+(sk?'. '+sk+' still need a name check':''));admin()}
+async function approve(ids){let n=0,sk=0,fl=0;for(const s of A.staged.filter(x=>ids.includes(x.id))){const nm=s.name.trim();if(!nm||!(s.ok||(s.ocr&&s.ocr.conf>=CFG.OCR_MIN))){sk++;continue}
+let pu;try{pu=await upImg(await fit(s.blob),s.file||'poster.jpg')}catch(e){fl++;toast('Poster upload failed: '+e.message);continue}
+try{await DB.put('recruits',{id:uid(),name:nm,portrait:s.portrait,posterId:s.id,posterUrl:pu,active:true,created:Date.now(),nameSrc:s.ok?'manual':'ocr',nameConf:s.ocr?s.ocr.conf:null,ocrName:s.ocr?s.ocr.text:'',verified:!!s.ok,needsReview:false,ocrDone:true,nreg:s.crop?s.crop.n:null})}catch(e){fl++;toast('Save failed: '+e.message);continue}await DB.del('staged',s.id);A.sel.delete(s.id);n++}
+toast(n+' recruits added'+(sk?'. '+sk+' still need a name check':'')+(fl?'. '+fl+' failed to upload':''));admin()}
 // --- data tab ---
-async function datTab(rs){const e=navigator.storage?.estimate?await navigator.storage.estimate():null;
-$('#tabc').innerHTML=`<h3>Backup and restore</h3><div class=row><button class=btn data-a=bk>Export backup (portraits + scores)</button><button class="btn s" data-a=bkp>Export with original posters</button><label class="btn s">Restore backup<input type=file id=rf accept=".json" hidden></label></div>
-<h3>Danger zone</h3><div class=row><button class="btn c" data-a=wipeall>Delete ALL recruits and posters</button><button class="btn s" data-a=clearq>Clear review queue</button><button class="btn s" data-a=wipescores>Reset leaderboard</button></div><p class=mu>After deleting, the same posters or ZIP can be imported again from scratch.</p>
-<h3>Limits and storage</h3><p class=mu style="max-width:640px">This build stores everything in your browser's IndexedDB: ${e?`about ${(e.usage/1e6).toFixed(1)} MB used of roughly ${(e.quota/1e6).toFixed(0)} MB available (varies by browser and device; Safari is the strictest)`:'quota unknown'}. Data is per browser and per device, and clearing site data erases it, so export backups.</p>
-<ul class=mu style="max-width:640px"><li>Per-poster limit: ${CFG.MAXFILE/1e6} MB (change CFG.MAXFILE). No limit on poster count; 100 posters at 2 to 5 MB is 200 to 500 MB of storage plus about 30 KB per portrait.</li><li>Portraits are resized to 320×400 JPEG. Each original poster is stored once, keyed by content hash, so duplicate uploads are ignored.</li><li>A ZIP is read in your browser and posters are decoded one batch at a time. Very large ZIPs (over about 1 GB) may exhaust phone memory; split them.</li><li>Names are read in your browser with Tesseract.js OCR (no API key). The engine and English language data download once from a public CDN; poster images are never uploaded. OCR can be wrong, so results under ${CFG.OCR_MIN}% confidence need your confirmation before they enter the game.</li></ul>
-<h3>Going cloud (shared leaderboard, real admin security)</h3><p class=mu style="max-width:640px">Replace the DB object with Supabase calls: tables recruits, players, results; Storage buckets posters (private) and portraits (public); Auth for the admin account with row-level security so only the admin role can write recruits and only a server function inserts results. Free-tier storage is about 1 GB with a per-file cap (check current Supabase limits), so 100 large posters may need a paid plan. Not connected in this prototype.</p>`;
+async function datTab(rs){
+$('#tabc').innerHTML=`<h3>Cloud storage</h3><p class=mu style="max-width:640px">Recruits and scores are saved in your Cloudflare Worker (<code>${esc(API)}</code>) and its D1 database. Portraits and original posters are uploaded to ImageKit (folder /BUPAF) through the Worker, so every player sees the same recruits and leaderboard. Posters over 5 MB are shrunk automatically before upload.</p><div class=row><button class="btn s" data-a=bk>Export backup (recruits + scores)</button><label class="btn s">Restore backup<input type=file id=rf accept=".json" hidden></label></div>
+<h3>Danger zone</h3><div class=row><button class="btn c" data-a=wipeall>Delete ALL recruits</button><button class="btn s" data-a=clearq>Clear review queue</button><button class="btn s" data-a=wipescores>Reset leaderboard</button></div><p class=mu style="max-width:640px">Deleted recruits are hidden from the game and admin (rows stay in D1 marked deleted; image files stay in ImageKit). The review queue and template settings are stored in this browser only.</p>`;
 $('#rf').onchange=async e=>{try{const j=JSON.parse(await e.target.files[0].text());const ex=new Set((await DB.all('recruits')).map(r=>r.id));let n=0;
-for(const r of j.recruits||[])if(!ex.has(r.id)){await DB.put('recruits',r);n++}for(const p of j.posters||[])await DB.put('posters',{id:p.id,file:p.file,blob:await (await fetch(p.data)).blob()});for(const r of j.results||[])await DB.put('results',r);toast(n+' recruits restored')}catch(x){toast('Invalid backup file')}admin()}}
-async function backup(withP){const du=b=>new Promise(r=>{const f=new FileReader();f.onload=()=>r(f.result);f.readAsDataURL(b)});
-const o={v:1,recruits:await DB.all('recruits'),results:await DB.all('results')};if(withP){o.posters=[];for(const p of await DB.all('posters'))o.posters.push({id:p.id,file:p.file,data:await du(p.blob)})}
+for(const r of j.recruits||[])if(!ex.has(r.id)){await DB.put('recruits',r);n++}for(const r of j.results||[])await DB.put('results',r);toast(n+' recruits restored')}catch(x){toast('Restore failed: '+x.message)}admin()}}
+async function backup(){const o={v:2,recruits:await DB.all('recruits'),results:await DB.all('results')};
 const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(o)],{type:'application/json'}));a.download='ledger-backup-'+new Date().toISOString().slice(0,10)+'.json';a.click()}
 
 // --- delete everything / bulk delete ---
-async function wipe(ids){for(const r of await DB.all('recruits'))if(!ids||ids.includes(r.id))await DB.del('recruits',r.id);
-const used=new Set((await DB.all('recruits')).map(r=>r.posterId));for(const p of await DB.all('posters'))if(!used.has(p.id))await DB.del('posters',p.id);
+async function wipe(ids){const rs=(await DB.all('recruits')).filter(r=>!ids||ids.includes(r.id));let n=0;for(const r of rs){await DB.del('recruits',r.id);n++;const el=$('#rp');if(el)el.textContent='Deleting '+n+'/'+rs.length+'…'}
 if(!ids){for(const s of await DB.all('staged'))await DB.del('staged',s.id);A.sel.clear()}A.Q=[];A.seen=new Set();A.rn=new Set()}
 // --- template editor for saved recruits (re-crops from stored originals) ---
 function tplTab(rs){const L=rs.filter(r=>r.posterId).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
 $('#tabc').innerHTML=L.length?`<p class=mu style="max-width:640px">Pick any saved recruit, move the portrait and name boxes on its original poster, then re-crop everyone. Original posters are never changed.</p><div class=row><select id=tsel>${L.map(r=>`<option value="${r.id}">${esc(r.name)}</option>`).join('')}</select><button class=btn data-a=openrec>Open editor</button></div><div id=rp class=mu></div><div id=edh></div>`:'<p><b>No saved posters.</b> Import and approve posters first.</p>'}
-async function openEdRec(id){const r=await DB.get('recruits',id),p=await DB.get('posters',r.posterId);if(!p)return toast('Original poster not found');A.E={id,rec:1,t:structuredClone(r.crop||A.tpl),b:await createImageBitmap(p.blob)};edPaint();$('#edh').scrollIntoView({behavior:'smooth'})}
+async function openEdRec(id){const r=await DB.get('recruits',id),p=await getPoster(r);if(!p)return toast('Original poster not found');A.E={id,rec:1,t:structuredClone(r.crop||A.tpl),b:await createImageBitmap(p.blob)};edPaint();$('#edh').scrollIntoView({behavior:'smooth'})}
 async function recrop(ids,t,one){const rs=(await DB.all('recruits')).filter(r=>r.posterId&&(ids?ids.includes(r.id):!r.crop));let n=0;
-for(const r of rs){const p=await DB.get('posters',r.posterId);if(!p)continue;const b=await createImageBitmap(p.blob);r.portrait=cv(b,pr(b,t.p),320,400).toDataURL('image/jpeg',.82);b.close();
+for(const r of rs){const p=await getPoster(r);if(!p)continue;const b=await createImageBitmap(p.blob);r.portrait=cv(b,pr(b,t.p),320,400).toDataURL('image/jpeg',.82);b.close();
 if(one){r.crop=structuredClone(t);r.nreg=t.n}else r.nreg=null;await DB.put('recruits',r);n++;const el=$('#rp');if(el)el.textContent='Re-cropping '+n+'/'+rs.length+'…'}return n}
